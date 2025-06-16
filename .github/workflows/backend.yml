@@ -1,0 +1,57 @@
+name: Deploy Spring Boot to EC2
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Give execute permission to mvnw
+        run: chmod +x mvnw
+
+      - name: Build WAR
+        run: ./mvnw clean package -DskipTests
+
+      - name: Copy Files via SCP
+        uses: appleboy/scp-action@v0.1.6
+        with:
+          host: ${{ secrets.BACKEND_EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "target/*.war"
+          target: "~/app"
+
+      - name: SSH and Restart App
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.BACKEND_EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            echo "🔍 Checking for container using port 8080..."
+            CONTAINER_ID=$(docker ps -q --filter "publish=8080")
+            if [ -n "$CONTAINER_ID" ]; then
+              echo "🛑 Stopping container on port 8080..."
+              docker stop $CONTAINER_ID
+              docker rm $CONTAINER_ID
+            fi
+
+            echo "🧼 Removing old springboot container if exists..."
+            docker rm -f sprnbg-boot-app || true
+            
+            echo "✅ Cloning the latest code..."
+            cd ~
+            rm -rf backend-demo-deploy
+            git clone https://github.com/vimu98/backend-demo-deploy
+            cd backend-demo-deploy
+
+
+            echo "🚀 Starting new springboot container..."
+            docker build -t spring-boot-app .
+            docker run -d -p 8080:8080 spring-boot-app -v ~/app:/app openjdk:17 java -jar /app/*.war
